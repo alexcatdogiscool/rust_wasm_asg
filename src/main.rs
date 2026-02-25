@@ -1,6 +1,8 @@
 
 use rand::Rng;
 use image::{RgbImage, Rgb};
+use std::time::{Instant, Duration};
+use rand::seq::SliceRandom;
 
 
 struct Air_point {
@@ -36,7 +38,7 @@ fn create_atomosphere(width: i32, height: i32, density: f64) -> Vec<Air_point> {
                 let point: Air_point = Air_point {
                     x: x,
                     y: y,
-                    field_strength: get_field_strength(x, y, height),
+                    field_strength: 0.0,
                 };
                 atomosphere.push(point);
             }
@@ -44,6 +46,13 @@ fn create_atomosphere(width: i32, height: i32, density: f64) -> Vec<Air_point> {
     }
 
     return atomosphere;
+}
+
+fn electrify_atomosphere(atomosphere: &mut Vec<Air_point>, x: u32, y: u32) {
+    for point in atomosphere.iter_mut() {
+        let dist = dist(x as i32, y as i32, point.x, point.y);
+        point.field_strength = 1.0 / (dist.powf(1.0)+1.0);
+    }
 }
 
 
@@ -91,16 +100,26 @@ fn draw_line(img: &mut RgbImage, x0: u32, y0: u32, x1: u32, y1: u32, color: Rgb<
 
 
 fn main() {
+
+    let mut rng = rand::thread_rng();
     
     let width = 500;
     let height = 500;
     let density: f64 = 0.01;// [density] Air_point's per unit^2. 1 is max, interpreted as probability that a given x,y screen pos constains an Air_point
 
+    let source = (250, 250);
+
+    // create the atomosphere
+    let mut atomosphere  = create_atomosphere(width, height, density);
+
+    // give it an electric field
+    electrify_atomosphere(&mut atomosphere, source.0, source.1);
+
     while true {
+        let start_time = Instant::now();
 
         
-        // create the atomosphere
-        let mut atomosphere  = create_atomosphere(width, height, density);
+        
 
         // init the bolt.
         let mut bolt: Bolt = Bolt {
@@ -121,26 +140,21 @@ fn main() {
 
             let last = bolt.points.last().unwrap();
 
-            let nearby: Vec<&Air_point> = atomosphere.iter()
-                .filter(|p| basic_dist(last.x, last.y, p.x, p.y) < 20.0).collect();
-            
+            let mut sorted_nearby: Vec<&Air_point> = atomosphere.iter()
+                .filter(|p| basic_dist(last.x, last.y, p.x, p.y) < 20.0)
+                .filter(|p| !bolt.points.iter().any(|bp| std::ptr::eq(*bp, *p)))
+                .collect();
 
-            let mut sorted_atompshphere: Vec<&&Air_point> = {// sorth the atomosphere points by electric field
-                let mut refs: Vec<&&Air_point> = nearby.iter().collect();
-
-                refs.sort_by(|a, b| {
-                    get_relative_field_strength(last, a).total_cmp(&get_relative_field_strength(last, b))
-                });
-
-                refs
-            };
-            sorted_atompshphere.retain(|p| !bolt.points.iter().any(|bp| std::ptr::eq(*bp, **p)));// remove all points that bolt has already touched
-            
+            sorted_nearby.sort_by(|a, b| {
+                get_relative_field_strength(last, a)
+                    .total_cmp(&get_relative_field_strength(last, b))
+            });
             // take the best candidate
-            bolt.points.push(sorted_atompshphere.first().expect("empty atomosphere :("));
+
+            bolt.points.push(sorted_nearby.first().expect("empty atomosphere :("));
 
             i += 1;
-            if (bolt.points.last().unwrap().y as f64 > width as f64 * 0.9) {
+            if (dist(bolt.points.last().unwrap().x, bolt.points.last().unwrap().y, source.0 as i32, source.1 as i32) < 10.0) {
                 running = false;
             }
 
@@ -172,6 +186,12 @@ fn main() {
         }
 
         img.save("bolt.png").unwrap();
+    
+        
+        println!("fps: {}", 1000.0 / start_time.elapsed().as_millis() as f64);
+
+        return;
+
     }
 
 }
