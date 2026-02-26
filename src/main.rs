@@ -4,6 +4,7 @@ use std::f32::consts::PI;
 
 use hound;
 use rustfft::{FftPlanner, num_complex::Complex};
+use std::env;
 
 
 
@@ -40,16 +41,13 @@ fn encode(data: String) -> Vec<f32> {
     // data
     
     for c in bin.chars() {
-        if c == '1' {
-            bit = encode_bit(1100.0, 1.0 / BAUD_RATE as f32);
-        }
-        else if c == '0' {
-            bit = encode_bit(1000.0, 1.0 / BAUD_RATE as f32);
-        }
-        else {
-            //bit = encode_bit(500.0, 1.0 / BAUD_RATE as f32);
-            //nothing
-        }
+
+        let mut bit = match c {
+            '1' => encode_bit(1100.0, 1.0 / BAUD_RATE as f32),
+            '0' => encode_bit(1000.0, 1.0 / BAUD_RATE as f32),
+            _ => continue,
+            
+        };
         audio.append(&mut bit);
     }
 
@@ -116,44 +114,34 @@ fn decode(audio: Vec<f32>, is_aligned: bool) -> Vec<char> {
         let freq = freq_tup[0].0;
         //println!("{}", freq);
 
-        if (((freq_tup[0].0 > 1800.0 && freq_tup[0].0 < 2200.0) && (freq_tup[1].0 > 800.0 && freq_tup[1].0 < 1300.0)) || ((freq_tup[1].0 > 1800.0 &&freq_tup[1].0 < 2200.0) && (freq_tup[0].0 > 800.0 && freq_tup[0].0 < 1300.0))) {// evil if statement
-            // if (loudest ton is 2khz and second loadest is 1khz) OR
-            // (loadest tone in 1khz and second loadest in 2khz)
-            
-            
+        let is_preamble = freq_tup[0].0 > 1800.0 && freq_tup[0].0 < 2200.0;
+
+        if (is_preamble) {
             //found preamble!!! (or postamble)
             if (is_aligned) {
                 // postamble
                 println!("end of data");
                 return bits;
             }
-            // we are in preamble
-            // need to align with it
-            // either out hop starts in the preamble and overflows to data, or
-            // starts in noise and overflows into preamble.
-            if (freq_tup[1].0 > 800.0 && freq_tup[1].0 < 1050.0) {
-                // the second loadest tone is 1khz
-                let ratio = freq_tup[0].1 / freq_tup[1].1;
-                // we are "ratio" of the way into preamble
-                let offset = SAMPLES_PER_BIT as f32 * ratio;
-                let data_start = ((s+hop) - offset as usize);
+            println!("found preamble");
+            let data_start = s + (hop*2);  // just start after this window
+            if data_start < audio.len() {
                 return decode(audio[data_start..].to_vec(), true);
-                // call this func again but at the starting pos.
-                // this preamble code wont be called till the postamble
             }
+            continue;
         }
 
         let mut bit: Option<char> = None;
         if (freq > 800.0 && freq < 1050.0) {
+            //println!("0");
             bit = Some('0');
         } else if (freq > 1050.0 && freq < 1300.0) {
+            //println!("1");
             bit = Some('1');
         }
 
         if let Some(b) = bit {
             bits.push(b);
-        } else {
-            println!("bit was None: {}, {}", freq, bits.len());
         }
         
         
@@ -163,20 +151,81 @@ fn decode(audio: Vec<f32>, is_aligned: bool) -> Vec<char> {
     bits
 }
 
+fn read_from_file(path: &str) -> Vec<f32> {
+    let mut reader = hound::WavReader::open(path).unwrap();
+    let spec = reader.spec();
+    let channels = spec.channels as usize;
+
+    let raw: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            reader.samples::<f32>().filter_map(|s| s.ok()).collect()
+        }
+        hound::SampleFormat::Int => {
+            let max_val = (1_i32 << (spec.bits_per_sample - 1)) as f32;
+            reader.samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / max_val)
+                .collect()
+        }
+    };
+
+    // average every `channels` samples into one mono sample
+    raw.chunks(channels)
+        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+        .collect()
+}
+
+fn bin_to_string(bits: Vec<char>) -> String {
+    bits.chunks(8).filter_map(|chunk| {
+        let byte: String = chunk.iter().collect();
+        u8::from_str_radix(&byte, 2).ok()
+    })
+    .map(|b| b as char)
+    .collect()
+}
 
 fn main() {
-    
 
-    let s = "hello".to_string();
-    println!("{}", s);
-    let b = string_to_bin(s.clone());
-    println!("{}", b);
 
-    let audio = encode(s);
+    let args: Vec<String> = env::args().collect();
+    if args.len() == 1 {
+        println!("Usage:\ncmd enc input file_name | to encode 'input' and save audio to 'file_name'");
+        println!("or");
+        println!("cmd dec file_name | to decode the data in 'file_name");
+        return;
+    }
 
-    let decoded = decode(audio, false);
-    let out: String = decoded.into_iter().collect();
+    match args[1].as_str() {
+        "enc" => {
+            if args.len() < 4 {
+                println!("Usage: cmd enc input file_name");
+                return;
+            }
+            let input = args[2].clone();
+            let path = args[3].clone();
+            let audio = encode(input);
+            match write_to_file(audio, &path) {
+                Ok(_) => println!("writen to {}", path),
+                Err(e) => println!("error writing file: {}", e),
+            }
+        }
 
-    println!("{}", out);
+        "dec" => {
+            if args.len() < 3 {
+                println!("Usage: cmd dec file_name");
+                return;
+            }
+            let path = args[2].clone();
+            let samples = read_from_file(&path);
+            let decoded = decode(samples, false);
+            let out = bin_to_string(decoded);
+            println!("{}", out);
+
+        }
+        _ => { println!("operation needs to be [enc|dec]") }
+
+    }
+
+
 
 }
