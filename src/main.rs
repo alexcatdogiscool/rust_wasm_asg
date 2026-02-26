@@ -11,6 +11,8 @@ use std::env;
 const BAUD_RATE: usize = 10;
 const SAMPLE_RATE: usize = 44100;
 const SAMPLES_PER_BIT: usize = SAMPLE_RATE / BAUD_RATE;
+const ZERO: f32 = 900.0;
+const ONE: f32 = 1100.0;
 
 fn string_to_bin(data: String) -> String {
     let binary = data.bytes().map(|b| format!("{:08b}", b)).collect::<Vec<String>>().join(" ");
@@ -43,8 +45,8 @@ fn encode(data: String) -> Vec<f32> {
     for c in bin.chars() {
 
         let mut bit = match c {
-            '1' => encode_bit(1100.0, 1.0 / BAUD_RATE as f32),
-            '0' => encode_bit(1000.0, 1.0 / BAUD_RATE as f32),
+            '1' => encode_bit(ONE, 1.0 / BAUD_RATE as f32),
+            '0' => encode_bit(ZERO, 1.0 / BAUD_RATE as f32),
             _ => continue,
             
         };
@@ -132,10 +134,10 @@ fn decode(audio: Vec<f32>, is_aligned: bool) -> Vec<char> {
         }
 
         let mut bit: Option<char> = None;
-        if (freq > 800.0 && freq < 1050.0) {
+        if (freq > 800.0 && freq < 1000.0) {
             //println!("0");
             bit = Some('0');
-        } else if (freq > 1050.0 && freq < 1300.0) {
+        } else if (freq > 1000.0 && freq < 1200.0) {
             //println!("1");
             bit = Some('1');
         }
